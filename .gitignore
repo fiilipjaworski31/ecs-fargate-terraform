@@ -6,7 +6,6 @@
 .terraform.lock.hcl
 
 # Variables
-terraform.tfvars
 *.auto.tfvars
 
 # Sensitive files
@@ -22,4 +21,4 @@ terraform.tfvars
 
 # OS
 .DS_Store
-Thumbs.db
+Thumbs.dbterraform.tfstate*
