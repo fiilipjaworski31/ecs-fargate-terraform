@@ -179,6 +179,170 @@ aws dynamodb delete-table --table-name terraform-state-lock-ecs
 8. **Observability**: CloudWatch Logs with 7-day retention
 9. **Lifecycle Management**: create_before_destroy for zero-downtime updates
 
+## Auto-Scaling Configuration (Part 3)
+
+ECS Service automatically scales based on CPU utilization:
+- **Minimum tasks**: 1
+- **Maximum tasks**: 3
+- **Scale-out trigger**: Average CPU > 50%
+- **Scale-in trigger**: Average CPU < 25% for 5 consecutive minutes (300 seconds)
+- **Cooldown**: 60s scale-out, 300s scale-in
+
+### Testing Auto-Scaling
+
+Generate CPU load to trigger scale-out:
+```bash
+# Generate load with curl loop
+for i in {1..180000}; do
+  curl -s http://$(terraform output -raw alb_dns_name)/ > /dev/null &
+  if [ $((i % 100)) -eq 0 ]; then
+    sleep 0.33
+  fi
+done
+
+# Monitor scaling in another terminal
+while true; do
+  echo "=== $(date) ==="
+  aws ecs describe-services \
+    --cluster $(terraform output -raw ecs_cluster_name) \
+    --services $(terraform output -raw ecs_service_name) \
+    --region eu-central-1 \
+    --query 'services[0].{desired:desiredCount,running:runningCount}' \
+    --output table
+  sleep 10
+done
+```
+
+Expected behavior:
+1. Initial state: 1 task running
+2. After 1-2 minutes of high CPU: desired count increases to 2
+3. If CPU remains high: may scale to 3 tasks
+4. After stopping load and 5 minutes below 25%: scales back to 1
+
+## CI/CD Pipeline (Part 3)
+
+### Pipeline Architecture
+
+GitHub Actions workflow with OIDC authentication (no AWS credentials in repo):
+
+**Pipeline Stages:**
+1. **Init & Validate** (automatic on push)
+   - `terraform init`
+   - `terraform fmt -check`
+   - `terraform validate`
+   - `tflint`
+
+2. **Plan** (automatic after Init)
+   - `terraform plan`
+   - Saves plan as artifact for Apply stage
+   - Uses read-only IAM role
+
+3. **Docker Build & Push** (automatic on main branch)
+   - Builds Docker image from `/app`
+   - Pushes to ECR with tags: `latest` and `${github.sha}`
+   - Only runs if ECR repository exists
+
+4. **Apply** (manual trigger only)
+   - Uses saved plan artifact from Plan stage
+   - Applies infrastructure changes
+   - Uses full-permission IAM role
+
+### Pipeline Authentication
+
+Uses OpenID Connect (OIDC) with two IAM roles for security:
+
+**Plan Role** (`ecs-hello-dev-github-plan`):
+- Read-only access to Terraform state (S3)
+- DynamoDB lock operations
+- Describe/List permissions for AWS resources
+- Cannot create, modify, or delete infrastructure
+
+**Apply Role** (`ecs-hello-dev-github-apply`):
+- Full AdministratorAccess for infrastructure management
+- ECR push permissions for Docker images
+- Only used for Apply stage (manual trigger)
+
+### Running the Pipeline
+
+**Automatic triggers:**
+```bash
+# Push to main or feature branch triggers Init + Plan
+git push origin main
+
+# Merge to main also triggers Docker build
+```
+
+**Manual Apply:**
+1. Go to GitHub Actions tab
+2. Select "Terraform CI/CD" workflow
+3. Click "Run workflow"
+4. Select branch: `main`
+5. Select action: `apply`
+6. Click "Run workflow"
+
+### GitHub Secrets Required
+
+Configure in repository Settings → Secrets and variables → Actions:
+- `AWS_ROLE_PLAN_ARN`: ARN of plan IAM role
+- `AWS_ROLE_APPLY_ARN`: ARN of apply IAM role
+
+Get ARNs from Terraform outputs:
+```bash
+terraform output github_actions_plan_role_arn
+terraform output github_actions_apply_role_arn
+```
+
+## CloudWatch Logging (Part 3)
+
+- **Log Group**: `/ecs/ecs-hello-dev`
+- **Retention**: 14 days (updated from 7 days)
+- **Stream Prefix**: `ecs`
+
+### Viewing Logs
+```bash
+# Tail logs in real-time
+aws logs tail /ecs/ecs-hello-dev --follow
+
+# Search for errors
+aws logs filter-log-events \
+  --log-group-name /ecs/ecs-hello-dev \
+  --filter-pattern "ERROR"
+
+# Get logs from specific time range
+aws logs filter-log-events \
+  --log-group-name /ecs/ecs-hello-dev \
+  --start-time $(date -d '1 hour ago' +%s)000 \
+  --end-time $(date +%s)000
+```
+
+## State Locking & Concurrency
+
+Terraform state uses DynamoDB locking to prevent concurrent modifications:
+- **Lock Table**: `terraform-state-lock-ecs`
+- Multiple engineers cannot apply simultaneously
+- Pipeline jobs respect the same lock
+- Prevents state corruption and race conditions
+
+If a lock is stuck (job was killed), force unlock:
+```bash
+terraform force-unlock <LOCK_ID>
+```
+
+## Best Practices Implemented (Updated)
+
+1. **Modular Design**: Each AWS service in separate module for reusability
+2. **Remote State**: S3 backend with DynamoDB locking prevents concurrent changes
+3. **Tagging**: Consistent tagging via provider default_tags (DRY principle)
+4. **Parameterization**: Zero hardcoded values - all configurable via variables
+5. **Security**: Private subnets for ECS, security groups with least-privilege, OIDC for CI/CD
+6. **High Availability**: Multi-AZ deployment for resilience
+7. **Auto Scaling**: CPU-based scaling (min 1, max 3 tasks)
+8. **Observability**: CloudWatch Logs with 14-day retention, Container Insights enabled
+9. **Lifecycle Management**: create_before_destroy for zero-downtime updates
+10. **CI/CD**: Automated pipeline with OIDC authentication and least-privilege IAM roles
+11. **Plan Artifacts**: Exact plan is applied to prevent drift
+12. **Docker Automation**: Image build and push fully automated in pipeline
+
 ## Troubleshooting
 
 ### ECS Tasks Failing to Start
