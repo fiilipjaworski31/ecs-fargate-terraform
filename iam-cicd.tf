@@ -109,6 +109,7 @@ resource "aws_iam_role_policy" "plan_policy" {
           "iam:ListAttachedRolePolicies",
           "logs:ListTagsForResource",
           "iam:ListRolePolicies",
+          "application-autoscaling:ListTagsForResource",
           "iam:GetOpenIDConnectProvider",
           "iam:ListOpenIDConnectProviders",
           "application-autoscaling:Describe*",
