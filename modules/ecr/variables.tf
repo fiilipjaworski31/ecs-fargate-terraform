@@ -40,3 +40,9 @@ variable "lifecycle_policy_count" {
   type        = number
   default     = 10
 }
+
+variable "force_delete" {
+  description = "Allow deletion of repository with images (use true for dev/test)"
+  type        = bool
+  default     = false
+}
