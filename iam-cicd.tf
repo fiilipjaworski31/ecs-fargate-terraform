@@ -107,6 +107,8 @@ resource "aws_iam_role_policy" "plan_policy" {
           "iam:GetRolePolicy",
           "iam:ListAttachedRolePolicies",
           "iam:ListRolePolicies",
+          "iam:GetOpenIDConnectProvider",
+          "iam:ListOpenIDConnectProviders",
           "application-autoscaling:Describe*",
           "cloudwatch:Describe*",
           "cloudwatch:List*"
