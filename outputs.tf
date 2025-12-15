@@ -88,3 +88,16 @@ output "alb_arn" {
   description = "ARN of Application Load Balancer"
   value       = module.alb.alb_arn
 }
+
+# ------------------------------------------------------------------------------
+# CI/CD Outputs
+# ------------------------------------------------------------------------------
+output "github_actions_plan_role_arn" {
+  description = "ARN of GitHub Actions Plan role for OIDC"
+  value       = aws_iam_role.github_actions_plan.arn
+}
+
+output "github_actions_apply_role_arn" {
+  description = "ARN of GitHub Actions Apply role for OIDC"
+  value       = aws_iam_role.github_actions_apply.arn
+}

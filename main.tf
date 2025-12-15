@@ -42,7 +42,7 @@ module "cloudwatch" {
   source = "./modules/cloudwatch"
 
   log_group_name = "/ecs/${local.name_prefix}"
-  retention_days = 7
+  retention_days = 14
   tags           = var.common_tags
 }
 

@@ -83,6 +83,7 @@ variable "desired_count" {
 variable "max_count" {
   description = "Maximum number of tasks"
   type        = number
+  default     = 3
 }
 
 variable "target_group_arn" {
@@ -111,6 +112,10 @@ variable "enable_container_insights" {
   default     = true
 }
 
+# ------------------------------------------------------------------------------
+# Autoscaling
+# ------------------------------------------------------------------------------
+
 variable "enable_auto_scaling" {
   description = "Enable auto scaling for ECS service"
   type        = bool
@@ -133,4 +138,22 @@ variable "scale_out_cooldown" {
   description = "Cooldown period for scale out (seconds)"
   type        = number
   default     = 60
+}
+
+variable "scale_out_threshold" {
+  description = "CPU threshold for scaling out"
+  type        = number
+  default     = 50
+}
+
+variable "scale_in_threshold" {
+  description = "CPU threshold for scaling in"
+  type        = number
+  default     = 25
+}
+
+variable "scale_in_evaluation_periods" {
+  description = "Number of periods for scale in evaluation"
+  type        = number
+  default     = 5
 }

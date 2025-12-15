@@ -77,7 +77,7 @@ variable "desired_count" {
 variable "max_count" {
   description = "Maximum number of ECS tasks"
   type        = number
-  default     = 2
+  default     = 3
 }
 
 # ------------------------------------------------------------------------------
