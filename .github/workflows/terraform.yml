@@ -1,0 +1,320 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+# Prevent concurrent runs on the same branch
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.13.0"
+  AWS_REGION: "us-east-1"
+
+jobs:
+  # ===========================================================================
+  # INIT & VALIDATE
+  # Runs on every push - validates code quality and syntax
+  # ===========================================================================
+  init:
+    name: "Init & Validate"
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_PLAN_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Init TFLint
+        run: tflint --init
+
+      - name: Run TFLint
+        run: tflint -f compact
+        continue-on-error: true
+
+      - name: Post validation summary
+        if: always()
+        run: |
+          echo "## Terraform Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Format | ${{ steps.fmt.outcome == 'success' && ' ✅  Passed' || ' ⚠️  Warning' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Init | ${{ steps.init.outcome == 'success' && ' ✅  Passed' || ' ❌  Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Validate | ${{ steps.validate.outcome == 'success' && ' ✅  Passed' || ' ❌  Failed' }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # PLAN
+  # Generates execution plan and stores as artifact
+  # SKIPPED IF ACTION IS DESTROY
+  # ===========================================================================
+  plan:
+    name: "Terraform Plan"
+    runs-on: ubuntu-latest
+    needs: init
+    if: github.event.inputs.action != 'destroy'
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_PLAN_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -out=tfplan
+        continue-on-error: false
+
+      - name: Check Plan Status
+        id: check_plan
+        run: |
+          if [ -f tfplan ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Plan Artifact
+        if: steps.check_plan.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.sha }}
+          path: tfplan
+          retention-days: 5
+
+      - name: Generate Plan Summary
+        if: always()
+        run: |
+          echo "## Terraform Plan Output" >> $GITHUB_STEP_SUMMARY
+          if [ -f tfplan ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            terraform show tfplan -no-color >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Could not read plan file" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+             echo "  No plan file generated. Check Terraform logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Fail workflow on Plan Error
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  # ===========================================================================
+  # DOCKER BUILD & PUSH
+  # Builds and pushes Docker image to ECR - runs only on main branch
+  # ===========================================================================
+  docker:
+    name: "Build & Push Docker Image"
+    runs-on: ubuntu-latest
+    needs: plan
+    if: github.ref == 'refs/heads/main' && github.event.inputs.action != 'destroy'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_APPLY_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get ECR repository URL
+        id: ecr
+        run: |
+          ECR_URL=$(aws ecr describe-repositories --repository-names ecs-hello-dev --region ${{ env.AWS_REGION }} --query 'repositories[0].repositoryUri' --output text 2>/dev/null || echo "")
+          if [ -z "$ECR_URL" ]; then
+            echo "ECR repository does not exist yet, skipping Docker build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "ecr_url=$ECR_URL" >> $GITHUB_OUTPUT
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Docker image
+        if: steps.ecr.outputs.skip == 'false'
+        run: |
+          docker build -t hello-world-app .
+        working-directory: ./app
+
+      - name: Tag and Push to ECR
+        if: steps.ecr.outputs.skip == 'false'
+        run: |
+          docker tag hello-world-app:latest ${{ steps.ecr.outputs.ecr_url }}:latest
+          docker tag hello-world-app:latest ${{ steps.ecr.outputs.ecr_url }}:${{ github.sha }}
+          docker push ${{ steps.ecr.outputs.ecr_url }}:latest
+          docker push ${{ steps.ecr.outputs.ecr_url }}:${{ github.sha }}
+
+      - name: Docker Build Summary
+        if: always()
+        run: |
+          echo "## Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.ecr.outputs.skip }}" == "true" ]; then
+            echo "ECR repository not found - skipped Docker build" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Image pushed to: ${{ steps.ecr.outputs.ecr_url }}" >> $GITHUB_STEP_SUMMARY
+            echo "Tags: latest, ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ===========================================================================
+  # APPLY
+  # Manual trigger only - applies the saved plan
+  # ===========================================================================
+  apply:
+    name: "Terraform Apply"
+    runs-on: ubuntu-latest
+    needs: [plan, docker]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
+    environment:
+      name: production
+      url: ${{ steps.apply.outputs.application_url }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_APPLY_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.sha }}
+
+      - name: Terraform Apply
+        id: apply
+        run: |
+          terraform apply -auto-approve tfplan
+          echo "application_url=$(terraform output -raw application_url 2>/dev/null || echo 'N/A')" >> $GITHUB_OUTPUT
+
+      - name: Apply Summary
+        if: always()
+        run: |
+          echo "## Terraform Apply Complete! " >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application URL:** $(terraform output -raw application_url 2>/dev/null || echo 'N/A')" >> $GITHUB_STEP_SUMMARY 
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Outputs:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          terraform output >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No outputs available" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # DESTROY (Optional - for cleanup)
+  # ===========================================================================
+  destroy:
+    name: "Terraform Destroy"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+    environment:
+      name: destroy-protection
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_APPLY_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
+
+      - name: Destroy Summary
+        if: always()
+        run: |
+          echo "## Terraform Destroy Complete! " >> $GITHUB_STEP_SUMMARY
+          echo "All resources have been destroyed." >> $GITHUB_STEP_SUMMARY

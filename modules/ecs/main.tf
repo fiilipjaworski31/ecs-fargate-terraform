@@ -100,38 +100,3 @@ resource "aws_ecs_service" "main" {
     }
   )
 }
-
-# ------------------------------------------------------------------------------
-# Auto Scaling Target
-# ------------------------------------------------------------------------------
-resource "aws_appautoscaling_target" "ecs" {
-  count = var.enable_auto_scaling ? 1 : 0
-
-  max_capacity       = var.max_count
-  min_capacity       = var.desired_count
-  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.main.name}"
-  scalable_dimension = "ecs:service:DesiredCount"
-  service_namespace  = "ecs"
-}
-
-# ------------------------------------------------------------------------------
-# Auto Scaling Policy - CPU Based
-# ------------------------------------------------------------------------------
-resource "aws_appautoscaling_policy" "cpu" {
-  count = var.enable_auto_scaling ? 1 : 0
-
-  name               = "${var.project_name}-${var.environment}-cpu-scaling"
-  policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.ecs[0].resource_id
-  scalable_dimension = aws_appautoscaling_target.ecs[0].scalable_dimension
-  service_namespace  = aws_appautoscaling_target.ecs[0].service_namespace
-
-  target_tracking_scaling_policy_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "ECSServiceAverageCPUUtilization"
-    }
-    target_value       = var.cpu_target_value
-    scale_in_cooldown  = var.scale_in_cooldown
-    scale_out_cooldown = var.scale_out_cooldown
-  }
-}
