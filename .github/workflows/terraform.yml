@@ -311,7 +311,14 @@ jobs:
         run: terraform init
 
       - name: Terraform Destroy
-        run: terraform destroy -auto-approve
+        run: |
+          terraform destroy -auto-approve \
+            -target=module.vpc \
+            -target=module.ecr \
+            -target=module.alb \
+            -target=module.ecs \
+            -target=module.cloudwatch \
+            -target=module.iam
 
       - name: Destroy Summary
         if: always()
