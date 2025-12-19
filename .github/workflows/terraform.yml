@@ -27,7 +27,6 @@ jobs:
     with:
       aws_region: "us-east-1"
       tf_version: "1.13.0"
-      tf_var_file: "dev.tfvars"
       working_directory: "."
       environment_name: "production"
       # Pass the user input action (plan/apply/destroy) or default to 'plan' on push
