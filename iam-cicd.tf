@@ -33,7 +33,7 @@ resource "aws_iam_role" "github_actions_plan" {
   tags = var.common_tags
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 
@@ -67,7 +67,7 @@ resource "aws_iam_role" "github_actions_apply" {
   tags = var.common_tags
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 
