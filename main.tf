@@ -33,7 +33,7 @@ module "ecr" {
   project_name = var.project_name
   environment  = var.environment
   tags         = var.common_tags
-  force_delete = var.environment == "dev" ? true : false
+  force_delete = true
 }
 
 # ------------------------------------------------------------------------------
