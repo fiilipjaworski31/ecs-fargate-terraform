@@ -90,14 +90,20 @@ output "alb_arn" {
 }
 
 # ------------------------------------------------------------------------------
-# CI/CD Outputs
+# Information about Bootstrap Layer
 # ------------------------------------------------------------------------------
-output "github_actions_plan_role_arn" {
-  description = "ARN of GitHub Actions Plan role for OIDC"
-  value       = aws_iam_role.github_actions_plan.arn
-}
-
-output "github_actions_apply_role_arn" {
-  description = "ARN of GitHub Actions Apply role for OIDC"
-  value       = aws_iam_role.github_actions_apply.arn
+output "bootstrap_layer_info" {
+  description = "Information about Bootstrap layer resources"
+  value = <<-EOT
+    
+    IAM roles for CI/CD are managed in the Bootstrap layer (00-bootstrap/)
+    
+    To view IAM role ARNs, run:
+    cd ../00-bootstrap && terraform output
+    
+    Current backend configuration:
+    - S3 Bucket: terraform-state-ecs-fargate-995419654404
+    - DynamoDB Table: terraform-state-lock-ecs
+    - State Key: application/terraform.tfstate
+  EOT
 }
